@@ -4,10 +4,13 @@ from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from groq import Groq
+from flask import Flask
+app = Flask(__name__)
+import os
 
 # --- НАСТРОЙКИ ---
-BOT_TOKEN = "8290800130:AAEcGkAJQVR-Os3Ijy7GakcQwh3CRTveQ28"
-GROQ_API_KEY = "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"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 ADMIN_ID = 5405313198
 CHANNEL_ID = -1002407007220
