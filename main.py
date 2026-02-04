@@ -9,10 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from fastapi import FastAPI, Request
 from groq import Groq
 
-# ================== НАСТРОЙКИ ==================
-
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+# ================== КОНСТАНТЫ ==================
 
 ADMIN_ID = 5405313198
 CHANNEL_ID = -1002407007220
@@ -21,23 +18,19 @@ SUPPORT_USERNAME = "Gaeid12"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = "https://my-tg-bot-xt1p.onrender.com/webhook"
 
-# ================== ИНИЦИАЛИЗАЦИЯ ==================
+# ================== ГЛОБАЛЬНЫЕ ==================
 
-client = Groq(api_key=GROQ_API_KEY)
-
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
-dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
+dp = Dispatcher(storage=MemoryStorage())
 
+bot = None
+client = None
 user_data = {}
 
 # ================== ИИ ==================
 
 def improve_text(user_input: str) -> str:
+    global client
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -190,6 +183,20 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+# ================== STARTUP (САМОЕ ВАЖНОЕ) ==================
+
 @app.on_event("startup")
 async def on_startup():
+    global bot, client
+
+    BOT_TOKEN = os.environ.get("BOT_TOKEN")
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+
+    client = Groq(api_key=GROQ_API_KEY)
+
     await bot.set_webhook(WEBHOOK_URL)
