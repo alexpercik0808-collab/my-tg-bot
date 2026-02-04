@@ -9,6 +9,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from fastapi import FastAPI, Request
 from groq import Groq
 
+print("=== ENV CHECK ===")
+print("BOT_TOKEN =", os.environ.get("BOT_TOKEN"))
+print("ALL KEYS =", sorted(os.environ.keys()))
+print("=================")
 # ================== КОНСТАНТЫ ==================
 
 ADMIN_ID = 5405313198
