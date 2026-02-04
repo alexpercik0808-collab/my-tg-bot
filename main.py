@@ -1,12 +1,11 @@
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from groq import Groq
-from flask import Flask
-app = Flask(__name__)
-import os
+from flask import Flask, request
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -19,6 +18,7 @@ SUPPORT_USERNAME = "Gaeid12"  # без @
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 client = Groq(api_key=GROQ_API_KEY)
+app = Flask(__name__)
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -57,13 +57,7 @@ def improve_text(user_input: str) -> str:
 # --- START ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    kb = [
-        [
-            types.InlineKeyboardButton(
-                text="🆘 Поддержка",
-                url=f"https://t.me/{SUPPORT_USERNAME}"
-            )
-        ]
+    kb =
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -103,17 +97,7 @@ async def handle_text(message: types.Message):
     new_text = improve_text(message.text)
     user_data[uid]["improved"] = new_text
 
-    kb = [
-        [
-            types.InlineKeyboardButton(
-                text="✅ Оставить",
-                callback_data="accept_text"
-            ),
-            types.InlineKeyboardButton(
-                text="✏️ Изменить",
-                callback_data="edit_manual"
-            )
-        ]
+    kb =
     ]
 
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -161,17 +145,7 @@ async def get_photo(message: types.Message):
         f"👤 <b>Продавец:</b> {username}"
     )
 
-    kb = [
-        [
-            types.InlineKeyboardButton(
-                text="✅ Опубликовать",
-                callback_data=f"pub_{uid}"
-            ),
-            types.InlineKeyboardButton(
-                text="❌ Отклонить",
-                callback_data=f"decl_{uid}"
-            )
-        ]
+    kb =
     ]
 
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -184,13 +158,7 @@ async def get_photo(message: types.Message):
     )
 
     # Сообщение пользователю + поддержка
-    kb_user = [
-        [
-            types.InlineKeyboardButton(
-                text="🆘 Поддержка",
-                url=f"https://t.me/{SUPPORT_USERNAME}"
-            )
-        ]
+    kb_user =
     ]
     markup_user = types.InlineKeyboardMarkup(inline_keyboard=kb_user)
 
@@ -229,10 +197,13 @@ async def decline_ad(callback: types.CallbackQuery):
     await callback.message.delete()
     await callback.answer()
 
-# --- ЗАПУСК ---
-async def main():
-    print("🚀 Бот запущен")
+# --- ВЕБХУКИ ---
+@app.route('/', methods=['POST'])
+async def telegram_webhook():
+    update = types.Update.model_validate_json(request.data)
+    await dp.feed_update(bot, update)
+    return 'ok'
 
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
-if __name__ == "__main__":
-    asyncio.run(main())
