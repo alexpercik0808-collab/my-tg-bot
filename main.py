@@ -1,11 +1,15 @@
-import asyncio
 import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import Update
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from fastapi import FastAPI, Request
 from groq import Groq
-from flask import Flask, request
+
+# ================== НАСТРОЙКИ ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -14,32 +18,46 @@ ADMIN_ID = 5405313198
 CHANNEL_ID = -1002407007220
 SUPPORT_USERNAME = "Gaeid12"
 
-client = Groq(api_key=GROQ_API_KEY)
-app = Flask(__name__)
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = "https://my-tg-bot-xt1p.onrender.com/webhook"
 
-bot = Bot(token=BOT_TOKEN,
-          default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+# ================== ИНИЦИАЛИЗАЦИЯ ==================
+
+client = Groq(api_key=GROQ_API_KEY)
+
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
+
+dp = Dispatcher(storage=MemoryStorage())
+app = FastAPI()
 
 user_data = {}
 
-# --- ИИ ---
+# ================== ИИ ==================
+
 def improve_text(user_input: str) -> str:
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system",
-                 "content": "Ты — лаконичный менеджер барахолки. Пиши кратко. Структура: Название, Состояние, Описание (2 фразы)."},
-                {"role": "user",
-                 "content": f"Сделай краткое объявление: {user_input}"}
+                {
+                    "role": "system",
+                    "content": "Ты — лаконичный менеджер барахолки. Пиши кратко. Структура: Название, Состояние, Описание (2 фразы)."
+                },
+                {
+                    "role": "user",
+                    "content": f"Сделай краткое объявление: {user_input}"
+                }
             ]
         )
         return completion.choices[0].message.content
     except Exception as e:
         return f"Ошибка ИИ: {e}"
 
-# --- START ---
+# ================== START ==================
+
 @dp.message(Command("start"))
 async def start(message: types.Message):
     kb = [[types.InlineKeyboardButton(
@@ -52,7 +70,8 @@ async def start(message: types.Message):
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
     )
 
-# --- ТЕКСТ ---
+# ================== ТЕКСТ ==================
+
 @dp.message(F.text & ~F.command)
 async def handle_text(message: types.Message):
     uid = message.from_user.id
@@ -88,6 +107,8 @@ async def handle_text(message: types.Message):
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
     )
 
+# ================== CALLBACK ==================
+
 @dp.callback_query(F.data == "accept_text")
 async def accept_text(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -102,7 +123,8 @@ async def edit_manual(callback: types.CallbackQuery):
     await callback.message.edit_text("✍️ Напиши свой текст.")
     await callback.answer()
 
-# --- ФОТО ---
+# ================== ФОТО ==================
+
 @dp.message(F.photo)
 async def get_photo(message: types.Message):
     uid = message.from_user.id
@@ -134,7 +156,8 @@ async def get_photo(message: types.Message):
 
     await message.answer("⌛ Отправлено админу.")
 
-# --- ПУБЛИКАЦИЯ ---
+# ================== ПУБЛИКАЦИЯ ==================
+
 @dp.callback_query(F.data.startswith("pub_"))
 async def publish(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
@@ -158,19 +181,15 @@ async def decline(callback: types.CallbackQuery):
     await bot.send_message(user_id, "❌ Отклонено.")
     await callback.answer()
 
-# --- ВЕБХУК ---
-@app.route('/', methods=['POST'])
-async def webhook():
-    update = types.Update.model_validate_json(request.data)
-    await dp.feed_update(bot, update)    
-    
-    return "ok"
-          
-loop = asyncio.get_event_loop()
-loop.create_task(dp.start_polling(bot))
+# ================== WEBHOOK ==================
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.model_validate(data, context={"bot": bot})
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
-
-    
+@app.on_event("startup")
+async def on_startup():
+    await bot.set_webhook(WEBHOOK_URL)
