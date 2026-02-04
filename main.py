@@ -164,6 +164,9 @@ async def webhook():
     update = types.Update.model_validate_json(request.data)
     asyncio.get_event_loop().create_task(dp.feed_update(bot, update))
     return "ok"
+          
+loop = asyncio.get_event_loop()
+loop.create_task(dp.start_polling(bot))
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
