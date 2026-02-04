@@ -162,7 +162,7 @@ async def decline(callback: types.CallbackQuery):
 @app.route('/', methods=['POST'])
 async def webhook():
     update = types.Update.model_validate_json(request.data)
-    await dp.feed_update(bot, update)
+    asyncio.run(dp.feed_update(bot, update))
     return "ok"
 
 if __name__ == '__main__':
