@@ -1,4 +1,4 @@
 aiogram==3.*
 groq
-flask
+flask[async]
 gunicorn
