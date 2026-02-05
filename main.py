@@ -1,14 +1,15 @@
 import os
 import asyncio
-from collections import defaultdict
+from asyncio import create_task
 
-from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Update, InputMediaPhoto
 from aiogram.fsm.storage.memory import MemoryStorage
+
+from fastapi import FastAPI, Request
 from groq import Groq
 
 # ================== CONFIG ==================
@@ -17,11 +18,10 @@ ADMIN_ID = 5405313198
 CHANNEL_ID = -1002407007220
 SUPPORT_USERNAME = "Gaeid12"
 
-BASE_URL = "https://my-tg-bot-xt1p.onrender.com"
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
+WEBHOOK_URL = "https://my-tg-bot-xt1p.onrender.com/webhook"
 
-# ================== APP / BOT ==================
+# ================== APP ==================
 
 app = FastAPI()
 dp = Dispatcher(storage=MemoryStorage())
@@ -30,17 +30,13 @@ bot: Bot | None = None
 client: Groq | None = None
 
 user_data = {}
-photo_buffer = defaultdict(list)  # media_group_id -> photos
 
-# ================== HEALTHCHECK (UPTIMEROBOT) ==================
-
-@app.get("/")
-async def root():
-    return {"status": "ok"}
+photo_buffer = {}   # media_group_id -> [file_id]
+photo_tasks = {}    # media_group_id -> asyncio.Task
 
 # ================== AI ==================
 
-def improve_text(user_input: str) -> str:
+def improve_text(text: str) -> str:
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -51,7 +47,7 @@ def improve_text(user_input: str) -> str:
                 },
                 {
                     "role": "user",
-                    "content": f"Сделай краткое объявление: {user_input}"
+                    "content": f"Сделай краткое объявление: {text}"
                 }
             ]
         )
@@ -69,23 +65,23 @@ async def start(message: types.Message):
     )]]
 
     await message.answer(
-        "👋 <b>Здарова!</b>\nПришли описание товара.",
+        "👋 <b>Привет!</b>\nПришли описание товара.",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
     )
 
-# ================== TEXT FLOW ==================
+# ================== TEXT ==================
 
 @dp.message(F.text & ~F.command)
 async def handle_text(message: types.Message):
     uid = message.from_user.id
 
-    if uid in user_data and user_data[uid]["step"] == "wait_manual_text":
+    if uid in user_data and user_data[uid].get("step") == "wait_manual_text":
         user_data[uid]["improved"] = message.text
         user_data[uid]["step"] = "wait_price"
         await message.answer("💰 Укажи цену.")
         return
 
-    if uid in user_data and user_data[uid]["step"] == "wait_price":
+    if uid in user_data and user_data[uid].get("step") == "wait_price":
         user_data[uid]["price"] = message.text
         user_data[uid]["step"] = "wait_photo"
         await message.answer("📸 Отправь фото (можно несколько).")
@@ -98,7 +94,6 @@ async def handle_text(message: types.Message):
 
     wait_msg = await message.answer("🤖 ИИ думает...")
     new_text = improve_text(message.text)
-
     user_data[uid]["improved"] = new_text
 
     kb = [[
@@ -127,29 +122,35 @@ async def edit_manual(callback: types.CallbackQuery):
     await callback.message.edit_text("✍️ Напиши свой текст.")
     await callback.answer()
 
-# ================== PHOTOS (MEDIA GROUP) ==================
+# ================== PHOTOS (ALBUM SAFE) ==================
 
 @dp.message(F.photo)
 async def handle_photos(message: types.Message):
     uid = message.from_user.id
 
-    if uid not in user_data or user_data[uid]["step"] != "wait_photo":
+    if uid not in user_data or user_data[uid].get("step") != "wait_photo":
         return
 
-    media_group_id = message.media_group_id
+    mgid = message.media_group_id or f"single_{message.message_id}"
 
-    if media_group_id:
-        photo_buffer[media_group_id].append(message.photo[-1].file_id)
+    photo_buffer.setdefault(mgid, []).append(message.photo[-1].file_id)
 
-        # ждём, пока придут все фото
-        await asyncio.sleep(1)
+    if mgid in photo_tasks:
+        photo_tasks[mgid].cancel()
 
-        if media_group_id not in photo_buffer:
-            return
+    photo_tasks[mgid] = create_task(process_album(mgid, uid))
 
-        photos = photo_buffer.pop(media_group_id)
-    else:
-        photos = [message.photo[-1].file_id]
+async def process_album(media_group_id: str, uid: int):
+    try:
+        await asyncio.sleep(1.5)
+    except asyncio.CancelledError:
+        return
+
+    photos = photo_buffer.pop(media_group_id, [])
+    photo_tasks.pop(media_group_id, None)
+
+    if not photos:
+        return
 
     data = user_data[uid]
     data["photos"] = photos
@@ -163,8 +164,8 @@ async def handle_photos(message: types.Message):
     )
 
     media = [
-        InputMediaPhoto(media=pid, caption=caption if i == 0 else None)
-        for i, pid in enumerate(photos)
+        InputMediaPhoto(media=p, caption=caption if i == 0 else None)
+        for i, p in enumerate(photos)
     ]
 
     kb = [[
@@ -179,14 +180,16 @@ async def handle_photos(message: types.Message):
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
     )
 
-    await message.answer("⌛ Отправлено админу.")
+    await bot.send_message(uid, "⌛ Отправлено админу.")
 
 # ================== PUBLISH ==================
 
 @dp.callback_query(F.data.startswith("pub_"))
 async def publish(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
-    data = user_data[user_id]
+    uid = int(callback.data.split("_")[1])
+    data = user_data.get(uid)
+    if not data:
+        return
 
     username = f"@{data['username']}" if data["username"] else "Контакт скрыт"
 
@@ -197,18 +200,18 @@ async def publish(callback: types.CallbackQuery):
     )
 
     media = [
-        InputMediaPhoto(media=pid, caption=caption if i == 0 else None)
-        for i, pid in enumerate(data["photos"])
+        InputMediaPhoto(media=p, caption=caption if i == 0 else None)
+        for i, p in enumerate(data["photos"])
     ]
 
     await bot.send_media_group(CHANNEL_ID, media)
-    await bot.send_message(user_id, "✅ Опубликовано!")
+    await bot.send_message(uid, "✅ Опубликовано!")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("decl_"))
 async def decline(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
-    await bot.send_message(user_id, "❌ Отклонено.")
+    uid = int(callback.data.split("_")[1])
+    await bot.send_message(uid, "❌ Отклонено.")
     await callback.answer()
 
 # ================== WEBHOOK ==================
@@ -219,6 +222,12 @@ async def telegram_webhook(request: Request):
     update = Update.model_validate(data, context={"bot": bot})
     await dp.feed_update(bot, update)
     return {"ok": True}
+
+# ================== HEALTHCHECK (для UptimeRobot) ==================
+
+@app.get("/")
+async def health():
+    return {"status": "ok"}
 
 # ================== STARTUP ==================
 
@@ -234,4 +243,3 @@ async def on_startup():
     client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
     await bot.set_webhook(WEBHOOK_URL)
-    
