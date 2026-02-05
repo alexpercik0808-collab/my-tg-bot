@@ -160,7 +160,7 @@ async def process_album(media_group_id: str, uid: int):
     caption = (
         f"{data['improved']}\n\n"
         f"💰 Цена: {data['price']}\n"
-        f"👤 Продавец: {username}"
+        f"👤 Контакты: {username}"
     )
 
     media = [
