@@ -1,6 +1,8 @@
 import os
 import asyncio
 import sqlite3
+from asyncio import create_task
+from contextlib import asynccontextmanager
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -12,27 +14,52 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
-
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from fastapi import FastAPI, Request
-
 from groq import Groq
+
 
 # ================= CONFIG =================
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+BASE_URL = os.environ["BASE_URL"]
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "5405313198"))
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002407007220"))
+ADMIN_ID = int(os.environ["ADMIN_ID"])
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username")
-SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "Gaeid12")
-
-WEBHOOK_URL = os.environ["WEBHOOK_URL"]
+BOT_USERNAME = os.environ["BOT_USERNAME"]
+SUPPORT_USERNAME = os.environ["SUPPORT_USERNAME"]
 
 WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
+
+
+# ================= DB =================
+
+conn = sqlite3.connect("ads.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    text TEXT,
+    address TEXT,
+    price TEXT
+)
+""")
+
+conn.commit()
+
 
 # ================= INIT =================
 
@@ -43,31 +70,15 @@ bot = Bot(
 
 dp = Dispatcher(storage=MemoryStorage())
 
+client = Groq(api_key=GROQ_API_KEY)
+
 app = FastAPI()
 
-groq = Groq(api_key=GROQ_API_KEY)
-
-# ================= DATABASE =================
-
-conn = sqlite3.connect("db.sqlite3")
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS ads (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-user_id INTEGER,
-username TEXT,
-text TEXT,
-price TEXT,
-photos TEXT
-)
-""")
-
-conn.commit()
-
-# ================= MEMORY =================
-
 user_data = {}
+
+photo_buffer = {}
+photo_tasks = {}
+
 
 # ================= AI =================
 
@@ -75,147 +86,120 @@ def improve_text(text):
 
     try:
 
-        completion = groq.chat.completions.create(
+        completion = client.chat.completions.create(
+
             model="llama-3.3-70b-versatile",
+
             messages=[
                 {
-                    "role":"system",
+                    "role": "system",
                     "content":
-                    "ты— технический редактор. Твоя задача: оформить текст пользователя в красивый список."
-                    "СТРОГО ЗАПРЕЩЕНО сокращать характеристики товара"
-                    "Выпиши их все через буллиты '•'. "
-                    "Если в исходном тексте есть подробности про состояние, характеристики товара—обязательно сохрани их"
+                    "Ты редактор объявлений. Сделай текст красивым, понятным и структурированным. "
+                    "Используй эмодзи умеренно. Не выдумывай информацию."
                 },
                 {
-                    "role":"user",
-                    "content":text
+                    "role": "user",
+                    "content": text
                 }
             ]
         )
 
         return completion.choices[0].message.content
 
-    except Exception as e:
-
+    except Exception:
         return text
 
-# ================= KEYBOARDS =================
-
-def start_kb():
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-
-            [
-                InlineKeyboardButton(
-                    text="📨 Подать объявление",
-                    callback_data="new_ad"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    text="🛠 Поддержка",
-                    url=f"https://t.me/gaeid12{SUPPORT_USERNAME}"
-                )
-            ]
-
-        ]
-    )
-
-
-def after_publish_kb():
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-
-            [
-                InlineKeyboardButton(
-                    text="📨 Подать объявление",
-                    url=f"https://t.me/{BOT_USERNAME}"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    text="🛠 Поддержка",
-                    url=f"https://t.me/gaeid12{SUPPORT_USERNAME}"
-                )
-            ]
-
-        ]
-    )
 
 # ================= START =================
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
 
-    await message.answer(
-
-        "👜 <b>новое объявление</b>\n\n"
-        "Нажми кнопку ниже чтобы подать объявление",
-
-        reply_markup=start_kb()
-
+    cursor.execute(
+        "INSERT OR IGNORE INTO users VALUES (?, ?)",
+        (message.from_user.id, message.from_user.username)
     )
+    conn.commit()
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📨 Создать объявление",
+                    callback_data="new_ad"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛠 Поддержка",
+                    url=f"https://t.me/{SUPPORT_USERNAME}"
+                )
+            ]
+        ]
+    )
+
+    await message.answer(
+        "👋 Привет!\n\n"
+        "Нажми «Создать объявление» или отправь описание товара.",
+        reply_markup=kb
+    )
+
 
 # ================= NEW AD =================
 
 @dp.callback_query(F.data == "new_ad")
 async def new_ad(callback: types.CallbackQuery):
 
-    user_data[callback.from_user.id] = {
-        "step":"wait_text"
-    }
+    user_data[callback.from_user.id] = {"step": "wait_text"}
 
     await callback.message.answer(
-        "✏ Отправь текст объявления"
+        "✏️ Отправь описание товара."
     )
+
+    await callback.answer()
+
 
 # ================= TEXT =================
 
 @dp.message(F.text)
-async def text_handler(message: types.Message):
+async def handle_text(message: types.Message):
 
     uid = message.from_user.id
 
     if uid not in user_data:
-        return
+        user_data[uid] = {"step": "wait_text"}
 
     step = user_data[uid]["step"]
 
+
     if step == "wait_text":
-
-        user_data[uid]["username"] = message.from_user.username
-        user_data[uid]["user_id"] = uid
-
-        wait = await message.answer("🤖 ИИ обрабатывает...")
 
         improved = improve_text(message.text)
 
+        user_data[uid]["original"] = message.text
         user_data[uid]["improved"] = improved
-        user_data[uid]["step"] = "wait_confirm"
 
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅ Оставить",
-                        callback_data="accept"
+                        text="✅ Использовать",
+                        callback_data="accept_text"
                     ),
                     InlineKeyboardButton(
-                        text="✏ Изменить",
-                        callback_data="edit"
+                        text="✏️ Изменить",
+                        callback_data="edit_text"
                     )
                 ]
             ]
         )
 
-        await wait.edit_text(
-            improved,
+        await message.answer(
+            f"✨ <b>Вариант ИИ:</b>\n\n{improved}",
             reply_markup=kb
         )
+
+        user_data[uid]["step"] = "wait_confirm"
 
         return
 
@@ -223,9 +207,19 @@ async def text_handler(message: types.Message):
     if step == "wait_manual":
 
         user_data[uid]["improved"] = message.text
+        user_data[uid]["step"] = "wait_photo"
+
+        await message.answer("📸 Отправь до 10 фото.")
+
+        return
+
+
+    if step == "wait_address":
+
+        user_data[uid]["address"] = message.text
         user_data[uid]["step"] = "wait_price"
 
-        await message.answer("💰 Отправь цену")
+        await message.answer("💰 Теперь отправь цену.")
 
         return
 
@@ -233,180 +227,165 @@ async def text_handler(message: types.Message):
     if step == "wait_price":
 
         user_data[uid]["price"] = message.text
-        user_data[uid]["step"] = "wait_photo"
-        user_data[uid]["photos"] = []
+        user_data[uid]["step"] = "done"
 
-        await message.answer("📸 Отправь фото (до 10)")
+        await send_to_admin(uid)
+
+        await message.answer("✅ Объявление отправлено на модерацию.")
 
         return
 
 
     if step == "wait_photo":
 
-        await message.answer("❗ Друг, отправь именно фото")
+        await message.answer("❌ Друг, отправь именно фото.")
 
-# ================= CALLBACKS =================
+        return
 
-@dp.callback_query(F.data == "accept")
-async def accept(callback: types.CallbackQuery):
+
+# ================= ACCEPT TEXT =================
+
+@dp.callback_query(F.data == "accept_text")
+async def accept_text(callback: types.CallbackQuery):
 
     uid = callback.from_user.id
 
-    user_data[uid]["step"] = "wait_price"
+    user_data[uid]["step"] = "wait_photo"
 
-    await callback.message.answer("💰 Отправь цену")
+    await callback.message.answer("📸 Отправь до 10 фото.")
 
-@dp.callback_query(F.data == "edit")
-async def edit(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "edit_text")
+async def edit_text(callback: types.CallbackQuery):
 
     uid = callback.from_user.id
 
     user_data[uid]["step"] = "wait_manual"
 
-    await callback.message.answer("✏ Напиши свой текст")
+    await callback.message.answer("✏️ Отправь свой текст.")
 
-# ================= PHOTO =================
+    await callback.answer()
+
+
+# ================= PHOTOS =================
 
 @dp.message(F.photo)
-async def photo_handler(message: types.Message):
+async def photos(message: types.Message):
 
     uid = message.from_user.id
 
-    if uid not in user_data:
+    if user_data.get(uid, {}).get("step") != "wait_photo":
         return
 
-    if user_data[uid]["step"] != "wait_photo":
+    mgid = message.media_group_id or str(message.message_id)
+
+    photo_buffer.setdefault(mgid, []).append(message.photo[-1].file_id)
+
+    if len(photo_buffer[mgid]) > 10:
         return
 
-    photos = user_data[uid]["photos"]
+    if mgid in photo_tasks:
+        photo_tasks[mgid].cancel()
 
-    if len(photos) >= 10:
+    photo_tasks[mgid] = create_task(process_album(mgid, uid))
 
-        await message.answer("❗ максимум 10 фото")
 
-        return
+async def process_album(mgid, uid):
 
-    photos.append(message.photo[-1].file_id)
+    await asyncio.sleep(1.5)
+
+    photos = photo_buffer.pop(mgid, [])
 
     user_data[uid]["photos"] = photos
 
-    if "timer" in user_data[uid]:
-        user_data[uid]["timer"].cancel()
+    user_data[uid]["step"] = "wait_address"
 
-    async def finalize():
+    await bot.send_message(
+        uid,
+        "📍 Теперь отправь адрес."
+    )
 
-        await asyncio.sleep(1)
 
-        data = user_data[uid]
+# ================= SEND TO ADMIN =================
 
-        cursor.execute(
+async def send_to_admin(uid):
 
-            "INSERT INTO ads(user_id,username,text,price,photos) VALUES(?,?,?,?,?)",
+    data = user_data[uid]
 
-            (
-                data["user_id"],
-                data["username"],
-                data["improved"],
-                data["price"],
-                ",".join(data["photos"])
-            )
+    caption = (
+        f"{data['improved']}\n\n"
+        f"📍 Адрес: {data['address']}\n"
+        f"💰 Цена: {data['price']}"
+    )
 
+    media = [
+        InputMediaPhoto(
+            media=p,
+            caption=caption if i == 0 else None
         )
+        for i, p in enumerate(data["photos"])
+    ]
 
-        conn.commit()
-
-        caption = (
-
-            f"{data['improved']}\n\n"
-            f"💰 Цена: {data['price']}"
-
-        )
-
-        media = []
-
-        for i,p in enumerate(data["photos"]):
-
-            media.append(
-
-                InputMediaPhoto(
-                    media=p,
-                    caption=caption if i == 0 else None
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Опубликовать",
+                    callback_data=f"pub_{uid}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"decl_{uid}"
                 )
+            ]
+        ]
+    )
 
-            )
+    await bot.send_media_group(ADMIN_ID, media)
 
-        await bot.send_media_group(ADMIN_ID,media)
+    await bot.send_message(
+        ADMIN_ID,
+        "Опубликовать?",
+        reply_markup=kb
+    )
 
-        await bot.send_message(
-
-            ADMIN_ID,
-
-            "Новое объявление",
-
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✅ Опубликовать",
-                            callback_data=f"publish_{uid}"
-                        ),
-                        InlineKeyboardButton(
-                            text="❌ Отклонить",
-                            callback_data=f"decline_{uid}"
-                        )
-                    ]
-                ]
-            )
-
-        )
-
-        await message.answer(
-            "✅ Отправлено админу"
-        )
-
-    user_data[uid]["timer"] = asyncio.create_task(finalize())
 
 # ================= PUBLISH =================
 
-@dp.callback_query(F.data.startswith("publish_"))
+@dp.callback_query(F.data.startswith("pub_"))
 async def publish(callback: types.CallbackQuery):
 
     uid = int(callback.data.split("_")[1])
 
-    data = user_data.get(uid)
+    data = user_data[uid]
 
-    if not data:
-        return
+    seller_link = f"tg://user?id={uid}"
 
     caption = (
-
         f"{data['improved']}\n\n"
+        f"📍 Адрес: {data['address']}\n"
         f"💰 Цена: {data['price']}\n\n"
-        f"<a href='https://t.me/{BOT_USERNAME}'>📨 Как подать объявление</a>"
-
+        f"🤖 <a href='https://t.me/{BOT_USERNAME}'>Как подать объявление</a>"
     )
 
-    media = []
-
-    for i,p in enumerate(data["photos"]):
-
-        media.append(
-
-            InputMediaPhoto(
-                media=p,
-                caption=caption if i == 0 else None
-            )
-
+    media = [
+        InputMediaPhoto(
+            media=p,
+            caption=caption if i == 0 else None
         )
+        for i, p in enumerate(data["photos"])
+    ]
 
-    await bot.send_media_group(CHANNEL_ID,media)
+    await bot.send_media_group(CHANNEL_ID, media)
 
-    seller_kb = InlineKeyboardMarkup(
+    kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✉ Написать продавцу",
-                    url=f"tg://user?id={uid}"
+                    text="✉️ Написать продавцу",
+                    url=seller_link
                 )
             ]
         ]
@@ -415,51 +394,42 @@ async def publish(callback: types.CallbackQuery):
     await bot.send_message(
         CHANNEL_ID,
         "Связаться:",
-        reply_markup=seller_kb
+        reply_markup=kb
     )
 
-    await bot.send_message(
-        uid,
-        "✅ Объявление опубликовано",
-        reply_markup=after_publish_kb()
-    )
+    await callback.answer("Опубликовано")
+
 
 # ================= DECLINE =================
 
-@dp.callback_query(F.data.startswith("decline_"))
+@dp.callback_query(F.data.startswith("decl_"))
 async def decline(callback: types.CallbackQuery):
 
     uid = int(callback.data.split("_")[1])
 
-    await bot.send_message(
-        uid,
-        "❌ Объявление отклонено",
-        reply_markup=start_kb()
-    )
+    await bot.send_message(uid, "❌ Объявление отклонено.")
+
+    await callback.answer()
+
 
 # ================= WEBHOOK =================
 
 @app.post(WEBHOOK_PATH)
-async def webhook(req: Request):
+async def webhook(request: Request):
 
     update = Update.model_validate(
-
-        await req.json(),
-        context={"bot":bot}
-
+        await request.json(),
+        context={"bot": bot}
     )
 
-    await dp.feed_update(bot,update)
+    await dp.feed_update(bot, update)
 
-    return {"ok":True}
+    return {"ok": True}
+
 
 # ================= STARTUP =================
 
 @app.on_event("startup")
 async def startup():
 
-    await bot.set_webhook(WEBHOOK_URL + WEBHOOK_PATH)
-
-@app.get("/")
-async def root():
-    return {"ok":True}
+    await bot.set_webhook(WEBHOOK_URL)
