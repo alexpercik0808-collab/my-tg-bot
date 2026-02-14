@@ -22,10 +22,10 @@ from groq import Groq
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BASE_URL = os.environ["BASE_URL"]
-
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 BOT_USERNAME = os.environ["BOT_USERNAME"]
+SUPPORT_USERNAME = os.environ["SUPPORT_USERNAME"]
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
@@ -36,7 +36,6 @@ bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-
 dp = Dispatcher(storage=MemoryStorage())
 client = Groq(api_key=GROQ_API_KEY)
 app = FastAPI()
@@ -56,9 +55,9 @@ def improve_text(text):
                     "role": "system",
                     "content": (
                         "Ты — технический редактор. "
-                        "Твоя задача оформить текст пользователя в красивый список, без удаления характеристик. "
-                        "Не сокращай характеристики товара, например состояние, материал и прочее если есть. "
-                        "Выпиши их все через буллиты '•'. "
+                        "Оформляй текст пользователя в красивый список, без удаления характеристик. "
+                        "Не сокращай характеристики товара. "
+                        "Выпиши их через буллиты '•'. "
                         "Не выдумывай лишнего."
                     )
                 },
@@ -90,7 +89,7 @@ async def start(message: types.Message):
 
 @dp.callback_query(F.data == "support")
 async def support(callback: types.CallbackQuery):
-    await callback.message.answer("📩 Свяжитесь с поддержкой: @YourSupportUsername")
+    await callback.message.answer(f"📩 Свяжитесь с поддержкой: @{SUPPORT_USERNAME}")
     await callback.answer()
 
 # ================= CREATE AD =================
@@ -238,16 +237,7 @@ async def publish(callback: types.CallbackQuery):
 
     user_data[uid]["status"] = "approved"
 
-    # 📌 Отправка в канал
-    # 1. Альбом
-    media = [InputMediaPhoto(media=p) for p in data["photos"]]
-    await bot.send_media_group(CHANNEL_ID, media)
-
-    # 2. Отдельное сообщение с кнопкой "Написать продавцу"
-    seller_link = f"tg://user?id={uid}"
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✉️ Написать продавцу", url=seller_link)]]
-    )
+    # Формируем подпись с текстом объявления
     caption = (
         f"📌 <u>{data['title']}</u>\n\n"
         f"{data['description']}\n\n"
@@ -256,9 +246,26 @@ async def publish(callback: types.CallbackQuery):
         f"———————————————\n"
         f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
     )
-    await bot.send_message(CHANNEL_ID, caption, reply_markup=kb)
 
-    # Уведомления пользователю и администратору
+    # Кнопка "Написать продавцу"
+    seller_link = f"tg://user?id={uid}"
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="✉️ Написать продавцу", url=seller_link)]]
+    )
+
+    # Альбом фото
+    media = []
+    for i, p in enumerate(data["photos"]):
+        if i == 0:
+            media.append(InputMediaPhoto(media=p, caption=caption, parse_mode=ParseMode.HTML))
+        else:
+            media.append(InputMediaPhoto(media=p))
+
+    # Отправляем альбом и прикрепляем кнопку к первому фото
+    await bot.send_media_group(CHANNEL_ID, media)
+    await bot.send_message(CHANNEL_ID, "✉️ Написать продавцу", reply_markup=kb)
+
+    # Уведомляем пользователя и администратора
     await bot.send_message(uid, "✅ Объявление опубликовано!", reply_markup=main_menu())
     await bot.send_message(ADMIN_ID, "✅ Объявление опубликовано")
 
