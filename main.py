@@ -1,6 +1,5 @@
 import os
 import asyncio
-import sqlite3
 from asyncio import create_task
 
 from aiogram import Bot, Dispatcher, types, F
@@ -24,9 +23,8 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BASE_URL = os.environ["BASE_URL"]
 
-ADMIN_IDS = list(map(int, os.environ["ADMIN_IDS"].split(",")))
+ADMIN_ID = int(os.environ["ADMIN_ID"])
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
-
 BOT_USERNAME = os.environ["BOT_USERNAME"]
 
 WEBHOOK_PATH = "/webhook"
@@ -54,11 +52,13 @@ def improve_text(text):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {
-                    "role": "system",
-                    "content": "ты—технический редактор. твоя задача оформить текст пользователя в красивый список, без удаления характеристик. не сокращай характеристики товара, например состояние, материал и прочее если есть. Выпиши их все через буллиты '•'."
+                {"role": "system",
+                 "content": 
+                 "Ты—технический редактор. твоя задача оформить текст пользователя в красивый спикок, без удаления характеристик."
+                 "не сокращай характеристики товара, например состояние, материал и прочее если есть"
+                 "Выпиши их все через буллиты '•'. "
                 },
-                {"role": "user", "content": f"Оформи объявление:\n{text}"}
+                {"role": "user", "content": text}
             ]
         )
         return completion.choices[0].message.content
@@ -109,8 +109,8 @@ async def text_handler(message: types.Message):
         improved = improve_text(message.text)
         user_data[uid] = {
             "step": "confirm_text",
-            "original": message.text,
-            "improved": improved
+            "improved": improved,
+            "status": "draft"
         }
 
         kb = InlineKeyboardMarkup(
@@ -137,6 +137,7 @@ async def text_handler(message: types.Message):
 
     if step == "wait_price":
         user_data[uid]["price"] = message.text
+        user_data[uid]["status"] = "pending"
         await send_to_admin(uid)
         await message.answer("✅ Отправлено на модерацию.", reply_markup=main_menu())
         return
@@ -204,27 +205,26 @@ async def send_to_admin(uid):
         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decl_{uid}")
     ]])
 
-    for admin_id in ADMIN_IDS:
-        await bot.send_media_group(admin_id, media)
-        await bot.send_message(admin_id, "Опубликовать?", reply_markup=kb)
+    await bot.send_media_group(ADMIN_ID, media)
+    await bot.send_message(ADMIN_ID, "Опубликовать?", reply_markup=kb)
 
 # ================= PUBLISH =================
 
 @dp.callback_query(F.data.startswith("pub_"))
 async def publish(callback: types.CallbackQuery):
 
-    if callback.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         await callback.answer("Нет доступа", show_alert=True)
         return
 
     uid = int(callback.data.split("_")[1])
     data = user_data.get(uid)
 
-    if not data:
+    if not data or data.get("status") != "pending":
         await callback.answer("Уже обработано")
         return
 
-    user_data.pop(uid)
+    user_data[uid]["status"] = "approved"
 
     title = data["improved"].split("\n")[0][:60]
 
@@ -241,10 +241,7 @@ async def publish(callback: types.CallbackQuery):
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(
-                text="✉️ Написать продавцу",
-                url=seller_link
-            )]
+            [InlineKeyboardButton(text="✉️ Написать продавцу", url=seller_link)]
         ]
     )
 
@@ -266,14 +263,18 @@ async def publish(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("decl_"))
 async def decline(callback: types.CallbackQuery):
 
-    if callback.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         await callback.answer("Нет доступа", show_alert=True)
         return
 
     uid = int(callback.data.split("_")[1])
+    data = user_data.get(uid)
 
-    if uid in user_data:
-        user_data.pop(uid)
+    if not data or data.get("status") != "pending":
+        await callback.answer("Уже обработано")
+        return
+
+    user_data[uid]["status"] = "declined"
 
     await bot.send_message(
         uid,
