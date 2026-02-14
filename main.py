@@ -74,8 +74,7 @@ def improve_text(text):
 def main_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📨 Создать объявление", callback_data="new_ad")],
-            [InlineKeyboardButton(text="🛠 Поддержка", url="https://t.me/gaeid12")]
+            [InlineKeyboardButton(text="📨 Создать объявление", callback_data="new_ad")]
         ]
     )
 
@@ -83,12 +82,9 @@ def main_menu():
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.answer(
-        "👋 Привет!\nНажми кнопку ниже.",
-        reply_markup=main_menu()
-    )
+    await message.answer("👋 Добро пожаловать!", reply_markup=main_menu())
 
-# ================= NEW AD =================
+# ================= CREATE AD =================
 
 @dp.callback_query(F.data == "new_ad")
 async def new_ad(callback: types.CallbackQuery):
@@ -99,10 +95,10 @@ async def new_ad(callback: types.CallbackQuery):
         return
 
     user_data[uid] = {"step": "wait_title"}
-    await callback.message.answer("📝 Введите заголовок объявления (например: Samsung A32)")
+    await callback.message.answer("📝 Введите заголовок:")
     await callback.answer()
 
-# ================= TEXT =================
+# ================= TEXT HANDLER =================
 
 @dp.message(F.text)
 async def text_handler(message: types.Message):
@@ -112,12 +108,25 @@ async def text_handler(message: types.Message):
     if step == "wait_title":
         user_data[uid]["title"] = message.text.strip()
         user_data[uid]["step"] = "wait_description"
-        await message.answer("📄 Теперь отправьте описание товара.")
+        await message.answer("📄 Отправьте описание товара:")
         return
 
     if step == "wait_description":
         improved = improve_text(message.text.strip())
+        user_data[uid]["raw_description"] = message.text.strip()
         user_data[uid]["description"] = improved
+        user_data[uid]["step"] = "confirm_description"
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Оставить", callback_data="keep_desc")],
+            [InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="edit_desc")]
+        ])
+
+        await message.answer(f"Вот отредактированный текст:\n\n{improved}", reply_markup=kb)
+        return
+
+    if step == "manual_edit":
+        user_data[uid]["description"] = message.text.strip()
         user_data[uid]["step"] = "wait_photo"
         await message.answer("📸 Отправьте до 10 фото.")
         return
@@ -125,7 +134,7 @@ async def text_handler(message: types.Message):
     if step == "wait_address":
         user_data[uid]["address"] = message.text.strip()
         user_data[uid]["step"] = "wait_price"
-        await message.answer("💰 Введите цену.")
+        await message.answer("💰 Введите цену:")
         return
 
     if step == "wait_price":
@@ -134,6 +143,22 @@ async def text_handler(message: types.Message):
         await send_to_admin(uid)
         await message.answer("✅ Отправлено на модерацию.", reply_markup=main_menu())
         return
+
+# ================= DESCRIPTION BUTTONS =================
+
+@dp.callback_query(F.data == "keep_desc")
+async def keep_desc(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    user_data[uid]["step"] = "wait_photo"
+    await callback.message.answer("📸 Отправьте до 10 фото.")
+    await callback.answer()
+
+@dp.callback_query(F.data == "edit_desc")
+async def edit_desc(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    user_data[uid]["step"] = "manual_edit"
+    await callback.message.answer("✏️ Отправьте свой вариант описания:")
+    await callback.answer()
 
 # ================= PHOTOS =================
 
@@ -146,9 +171,6 @@ async def photos(message: types.Message):
     mgid = message.media_group_id or str(message.message_id)
     photo_buffer.setdefault(mgid, []).append(message.photo[-1].file_id)
 
-    if len(photo_buffer[mgid]) > 10:
-        return
-
     if mgid in photo_tasks:
         photo_tasks[mgid].cancel()
 
@@ -159,7 +181,7 @@ async def process_album(mgid, uid):
     photos = photo_buffer.pop(mgid, [])
     user_data[uid]["photos"] = photos
     user_data[uid]["step"] = "wait_address"
-    await bot.send_message(uid, "📍 Введите адрес.")
+    await bot.send_message(uid, "📍 Введите адрес:")
 
 # ================= SEND TO ADMIN =================
 
@@ -184,7 +206,7 @@ async def send_to_admin(uid):
     ]])
 
     await bot.send_media_group(ADMIN_ID, media)
-    await bot.send_message(ADMIN_ID, "Опубликовать?", reply_markup=kb)
+    await bot.send_message(ADMIN_ID, "Модерация:", reply_markup=kb)
 
 # ================= PUBLISH =================
 
@@ -204,16 +226,16 @@ async def publish(callback: types.CallbackQuery):
 
     user_data[uid]["status"] = "approved"
 
+    seller_link = f"tg://user?id={uid}"
+
     caption = (
         f"📌 <u>{data['title']}</u>\n\n"
         f"{data['description']}\n\n"
-        f"💰 Цена — {data['price']}\n\n"
-        f"📍 <u>Адрес:</u> {data['address']}\n\n"
+        f"<u>💰 Цена:</u> {data['price']}\n"
+        f"<u>📍 Адрес:</u> {data['address']}\n\n"
         f"———————————————\n"
-        f"❗ <a href='https://t.me/{BOT_USERNAME}'>Как разместить объявление</a>"
+        f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
     )
-
-    seller_link = f"tg://user?id={uid}"
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -221,13 +243,22 @@ async def publish(callback: types.CallbackQuery):
         ]
     )
 
-    media = [
-        InputMediaPhoto(media=p, caption=caption if i == 0 else None)
-        for i, p in enumerate(data["photos"])
-    ]
+    media = []
+    for i, p in enumerate(data["photos"]):
+        if i == 0:
+            media.append(InputMediaPhoto(media=p, caption=caption))
+        else:
+            media.append(InputMediaPhoto(media=p))
 
     await bot.send_media_group(CHANNEL_ID, media)
-    await bot.send_message(CHANNEL_ID, " ", reply_markup=kb)
+
+    # Отдельно кнопку прикрепляем к первому сообщению
+    sent = await bot.send_photo(
+        CHANNEL_ID,
+        data["photos"][0],
+        caption=caption,
+        reply_markup=kb
+    )
 
     await bot.send_message(uid, "✅ Объявление опубликовано!", reply_markup=main_menu())
     await bot.send_message(ADMIN_ID, "✅ Объявление опубликовано")
@@ -270,4 +301,3 @@ async def webhook(request: Request):
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(WEBHOOK_URL)
-
