@@ -69,7 +69,13 @@ def improve(text):
     try:
         r=client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role":"user","content":f"Оформи объявление красиво списком через буллиты "•" без удаления характеристик:\n{text}"}]
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "ты—технический редактор. твоя задача оформить текст пользователя в красивый список, без удаления характеристик. не сокращай характеристики товара, например состояние, материал и прочее если есть. Выпиши их все через буллиты '•'."
+                },
+                {"role": "user", "content": f"Оформи объявление:\n{text}"}
+            ]
         )
         return r.choices[0].message.content
     except:
