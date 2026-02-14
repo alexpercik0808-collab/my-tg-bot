@@ -39,6 +39,10 @@ bot = Bot(
 dp = Dispatcher(storage=MemoryStorage())
 client = Groq(api_key=GROQ_API_KEY)
 app = FastAPI()
+@app.get("/")
+async def root():
+    return {"status": "working", "info": "Bot is active"}
+
 
 user_data = {}
 photo_buffer = {}
