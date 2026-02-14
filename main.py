@@ -17,7 +17,11 @@ from openai import AsyncOpenAI
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+BASE_URL = os.environ["BASE_URL"]
+BOT_USERNAME = os.environ["BOT_USERNAME"]
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
 
 bot = Bot(
     token=TOKEN,
