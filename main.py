@@ -203,7 +203,14 @@ async def process_album(mgid, uid):
 # ================= SEND TO ADMIN =================
 
 async def send_to_admin(uid):
-    data = user_data[uid]
+    data = user_data(uid) 
+    if not data:
+        return
+photos = data.get("photos", [])
+
+    if not photos:
+        await bot.send_message(uid, "❌ Ошибка: фото не получены. Попробуйте заново.")
+        return
 
     caption = (
         f"<b>{data['title']}</b>\n\n"
@@ -214,16 +221,19 @@ async def send_to_admin(uid):
 
     media = [
         InputMediaPhoto(media=p, caption=caption if i == 0 else None)
-        for i, p in enumerate(data["photos"])
+        for i, p in enumerate(photos)
     ]
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
+kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"pub_{uid}"),
         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decl_{uid}")
     ]])
-
-    await bot.send_media_group(ADMIN_ID, media)
-    await bot.send_message(ADMIN_ID, "Модерация:", reply_markup=kb)
+try:
+        await bot.send_media_group(ADMIN_ID, media)
+        await bot.send_message(ADMIN_ID, "Модерация:", reply_markup=kb)
+    except Exception as e:
+        print("ADMIN SEND ERROR:", e)
+        await bot.send_message(uid, "❌ Ошибка отправки на модерацию.")
 
 # ================= PUBLISH =================
 
