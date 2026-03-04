@@ -103,8 +103,8 @@ async def support(callback: types.CallbackQuery):
 async def new_ad(callback: types.CallbackQuery):
     uid = callback.from_user.id
 
-    if uid in user_data and user_data[uid].get("status") == "pending":
-        await callback.answer("У вас уже есть объявление на модерации", show_alert=True)
+    if uid in user_data:
+        await callback.answer("У вас уже есть незавершённое объявление", show_alert=True)
         return
 
     user_data[uid] = {"step": "wait_title"}
@@ -233,7 +233,8 @@ try:
         await bot.send_message(ADMIN_ID, "Модерация:", reply_markup=kb)
     except Exception as e:
         print("ADMIN SEND ERROR:", e)
-        await bot.send_message(uid, "❌ Ошибка отправки на модерацию.")
+    user_data.pop(uid, None)  # ← ВОТ ЭТО ДОБАВИТЬ
+    await bot.send_message(uid, "❌ Ошибка отправки. Попробуйте создать объявление заново.")
 
 # ================= PUBLISH =================
 
