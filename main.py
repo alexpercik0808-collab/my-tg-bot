@@ -39,10 +39,10 @@ bot = Bot(
 dp = Dispatcher(storage=MemoryStorage())
 client = Groq(api_key=GROQ_API_KEY)
 app = FastAPI()
+
 @app.get("/")
 async def root():
     return {"status": "working", "info": "Bot is active"}
-
 
 user_data = {}
 photo_buffer = {}
@@ -116,7 +116,12 @@ async def new_ad(callback: types.CallbackQuery):
 @dp.message(F.text)
 async def text_handler(message: types.Message):
     uid = message.from_user.id
-    step = user_data.get(uid, {}).get("step")
+    
+    if uid not in user_data:
+        await message.answer("Пожалуйста, начните с /start")
+        return
+        
+    step = user_data[uid].get("step")
 
     if step == "wait_title":
         user_data[uid]["title"] = message.text.strip()
@@ -130,11 +135,12 @@ async def text_handler(message: types.Message):
         user_data[uid]["description"] = improved
         user_data[uid]["step"] = "confirm_description"
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Оставить", callback_data="keep_desc")],
-            [InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="edit_desc")]
-        ])
-
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Оставить", callback_data="keep_desc"),
+                InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="edit_desc")
+            ]]
+        )
         await message.answer(f"Вот отредактированный текст:\n\n{improved}", reply_markup=kb)
         return
 
@@ -154,7 +160,6 @@ async def text_handler(message: types.Message):
         user_data[uid]["price"] = message.text.strip()
         user_data[uid]["status"] = "pending"
         await send_to_admin(uid)
-        await message.answer("✅ Отправлено на модерацию.", reply_markup=main_menu())
         return
 
 # ================= DESCRIPTION BUTTONS =================
@@ -162,6 +167,10 @@ async def text_handler(message: types.Message):
 @dp.callback_query(F.data == "keep_desc")
 async def keep_desc(callback: types.CallbackQuery):
     uid = callback.from_user.id
+    if uid not in user_data:
+        await callback.answer("Сессия истекла, начните заново", show_alert=True)
+        return
+        
     user_data[uid]["step"] = "wait_photo"
     await callback.message.answer("📸 Отправьте до 10 фото.")
     await callback.answer()
@@ -169,6 +178,10 @@ async def keep_desc(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "edit_desc")
 async def edit_desc(callback: types.CallbackQuery):
     uid = callback.from_user.id
+    if uid not in user_data:
+        await callback.answer("Сессия истекла, начните заново", show_alert=True)
+        return
+        
     user_data[uid]["step"] = "manual_edit"
     await callback.message.answer("✏️ Отправьте свой вариант описания:")
     await callback.answer()
@@ -178,7 +191,7 @@ async def edit_desc(callback: types.CallbackQuery):
 @dp.message(F.photo)
 async def photos(message: types.Message):
     uid = message.from_user.id
-    if user_data.get(uid, {}).get("step") != "wait_photo":
+    if uid not in user_data or user_data[uid].get("step") != "wait_photo":
         return
 
     mgid = f"{uid}_{message.media_group_id or message.message_id}"
@@ -195,25 +208,30 @@ async def photos(message: types.Message):
 
 async def process_album(mgid, uid):
     await asyncio.sleep(1.5)
-    photos = photo_buffer.pop(mgid, [])
-    user_data[uid]["photos"] = photos
-    user_data[uid]["step"] = "wait_address"
-    await bot.send_message(uid, "📍 Введите адрес:")
+    if mgid in photo_buffer:
+        photos = photo_buffer.pop(mgid, [])
+        if uid in user_data:
+            user_data[uid]["photos"] = photos
+            user_data[uid]["step"] = "wait_address"
+            await bot.send_message(uid, "📍 Введите адрес:")
 
 # ================= SEND TO ADMIN =================
 
 async def send_to_admin(uid):
-    data = user_data(uid) 
+    data = user_data.get(uid)
     if not data:
         return
-photos = data.get("photos", [])
+
+    photos = data.get("photos", [])
 
     if not photos:
         await bot.send_message(uid, "❌ Ошибка: фото не получены. Попробуйте заново.")
+        if uid in user_data:
+            user_data.pop(uid, None)
         return
 
     caption = (
-        f"<b>{data['title']}</b>\n\n"
+        f"{data['title']}\n\n"
         f"{data['description']}\n\n"
         f"📍 {data['address']}\n"
         f"💰 {data['price']}"
@@ -224,17 +242,22 @@ photos = data.get("photos", [])
         for i, p in enumerate(photos)
     ]
 
-kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"pub_{uid}"),
-        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decl_{uid}")
-    ]])
-try:
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"pub_{uid}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decl_{uid}")
+        ]]
+    )
+
+    try:
         await bot.send_media_group(ADMIN_ID, media)
         await bot.send_message(ADMIN_ID, "Модерация:", reply_markup=kb)
+        await bot.send_message(uid, "✅ Отправлено на модерацию.", reply_markup=main_menu())
     except Exception as e:
         print("ADMIN SEND ERROR:", e)
-    user_data.pop(uid, None)  # ← ВОТ ЭТО ДОБАВИТЬ
-    await bot.send_message(uid, "❌ Ошибка отправки. Попробуйте создать объявление заново.")
+        if uid in user_data:
+            user_data.pop(uid, None)
+        await bot.send_message(uid, "❌ Ошибка отправки. Попробуйте создать объявление заново.")
 
 # ================= PUBLISH =================
 
@@ -255,10 +278,10 @@ async def publish(callback: types.CallbackQuery):
 
     # Формируем подпись с текстом объявления
     caption = (
-        f"📌 <u>{data['title']}</u>\n\n"
+        f"📌 {data['title']}\n\n"
         f"{data['description']}\n\n"
-        f"<u>💰 Цена:</u> {data['price']}\n"
-        f"<u>📍 Адрес:</u> {data['address']}\n\n"
+        f"💰 Цена: {data['price']}\n"
+        f"📍 Адрес: {data['address']}\n\n"
         f"———————————————\n"
         f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
     )
@@ -286,6 +309,8 @@ async def publish(callback: types.CallbackQuery):
     await bot.send_message(ADMIN_ID, "✅ Объявление опубликовано")
 
     await callback.message.edit_reply_markup(reply_markup=None)
+    if uid in user_data:
+        user_data.pop(uid, None)
     await callback.answer("Опубликовано")
 
 # ================= DECLINE =================
@@ -309,6 +334,8 @@ async def decline(callback: types.CallbackQuery):
     await bot.send_message(ADMIN_ID, "❌ Объявление отклонено")
 
     await callback.message.edit_reply_markup(reply_markup=None)
+    if uid in user_data:
+        user_data.pop(uid, None)
     await callback.answer("Отклонено")
 
 # ================= WEBHOOK =================
@@ -321,7 +348,6 @@ async def webhook(request: Request):
         asyncio.create_task(dp.feed_update(bot, update))
     except Exception as e:
         print("WEBHOOK ERROR:", e)
-
     return {"ok": True}
 
 @app.on_event("startup")
