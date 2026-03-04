@@ -304,8 +304,13 @@ async def decline(callback: types.CallbackQuery):
 
 @app.post(WEBHOOK_PATH)
 async def webhook(request: Request):
-    update = Update.model_validate(await request.json(), context={"bot": bot})
-    await dp.feed_update(bot, update)
+    try:
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot})
+        asyncio.create_task(dp.feed_update(bot, update))
+    except Exception as e:
+        print("WEBHOOK ERROR:", e)
+
     return {"ok": True}
 
 @app.on_event("startup")
