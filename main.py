@@ -282,7 +282,7 @@ async def publish(callback: types.CallbackQuery):
     f"{data['description']}\n\n"
     f"💰 <u>Цена: {data['price']}</u>\n"  # Подчеркнутая цена
     f"📍 <u>Адрес: {data['address']}</u>\n\n" # Подчеркнутый адрес
-    f"—\n"
+    f"— — — — — — — — — — — — \n"
     f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
     )
 
