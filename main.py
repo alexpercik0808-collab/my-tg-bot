@@ -278,12 +278,12 @@ async def publish(callback: types.CallbackQuery):
 
     # Формируем подпись с текстом объявления
     caption = (
-        f"📌 {data['title']}\n\n"
-        f"{data['description']}\n\n"
-        f"💰 Цена: {data['price']}\n"
-        f"📍 Адрес: {data['address']}\n\n"
-        f"———————————————\n"
-        f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
+        f"<u>{data['title']}</u>\n\n"         # Подчеркнутый заголовок
+    f"{data['description']}\n\n"
+    f"💰 <u>Цена: {data['price']}</u>\n"  # Подчеркнутая цена
+    f"📍 <u>Адрес: {data['address']}</u>\n\n" # Подчеркнутый адрес
+    f"—\n"
+    f"<a href='https://t.me/{BOT_USERNAME}'>Подать объявление</a>"
     )
 
     # Кнопка "Написать продавцу"
